@@ -398,24 +398,32 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
 })
 
-// ✅ Enhanced CORS Configuration
+// ✅ ALLOW ALL ORIGINS - No restrictions
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173", // Your frontend
-      "http://localhost:3000",
-      "http://localhost:8080",
-      "https://your-frontend-domain.com", // Add your deployed frontend domain
-    ],
-    credentials: true,
+    origin: "*", // ✅ Allow all origins
+    credentials: false, // ✅ Set to false when using wildcard
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
     optionsSuccessStatus: 200,
   }),
 )
 
-// Handle preflight requests explicitly
-app.options("*", cors())
+// ✅ Handle ALL preflight requests
+app.options("*", (req, res) => {
+  res.header("Access-Control-Allow-Origin", "*")
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, Origin")
+  res.status(200).send()
+})
+
+// ✅ Add CORS headers to ALL responses
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*")
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, Origin")
+  next()
+})
 
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
@@ -500,15 +508,16 @@ app.get("/", (req, res) => {
     const states = { 0: "Disconnected", 1: "Connected", 2: "Connecting", 3: "Disconnecting" }
 
     res.json({
-      message: "Getachew Blog API with MongoDB Atlas",
+      message: "🚀 Getachew Blog API is running!",
       status: "✅ Online",
       database: states[dbState] || "Unknown",
       timestamp: new Date().toISOString(),
-      cors: "Enabled for localhost:5173",
+      cors: "✅ Enabled for ALL origins",
       endpoints: {
-        blogs: "/blog",
-        auth: "/api/auth/login",
-        health: "/health",
+        blogs: "GET /blog",
+        createBlog: "POST /blog/upload (with auth)",
+        auth: "POST /api/auth/login",
+        health: "GET /health",
       },
     })
   } catch (error) {
@@ -533,6 +542,8 @@ app.get("/health", (req, res) => {
       memory: process.memoryUsage(),
       database: states[dbState] || "Unknown",
       timestamp: new Date().toISOString(),
+      cors: "Enabled for ALL origins",
+      blogCount: sampleBlogs.length,
     })
   } catch (error) {
     console.error("❌ Error in /health route:", error)
@@ -543,10 +554,12 @@ app.get("/health", (req, res) => {
   }
 })
 
-// ✅ Add direct blog route (fallback if blogRoutes fails)
+// ✅ MAIN BLOG ROUTE - This is what your frontend calls
 app.get("/blog", (req, res) => {
   try {
-    console.log("📝 Direct blog endpoint called")
+    console.log("📝 GET /blog endpoint called")
+    console.log("Request origin:", req.headers.origin)
+    console.log("Request headers:", req.headers)
 
     // Return sample data with proper structure
     const blogsWithImageUrls = sampleBlogs.map((blog) => ({
@@ -554,6 +567,7 @@ app.get("/blog", (req, res) => {
       imageUrl: blog.image ? `https://getach-blog-api.vercel.app/uploads/${blog.image}` : null,
     }))
 
+    console.log("✅ Returning", blogsWithImageUrls.length, "blogs")
     res.json(blogsWithImageUrls)
   } catch (error) {
     console.error("❌ Error in /blog route:", error)
@@ -565,14 +579,37 @@ app.get("/blog", (req, res) => {
   }
 })
 
+// ✅ Get blog by ID
+app.get("/blog/:id", (req, res) => {
+  try {
+    const { id } = req.params
+    console.log(`📖 GET /blog/${id} endpoint called`)
+
+    const blog = sampleBlogs.find((blog) => blog._id === id || blog.id === id)
+
+    if (!blog) {
+      return res.status(404).json({ error: "Blog not found" })
+    }
+
+    res.json({
+      ...blog,
+      imageUrl: blog.image ? `https://getach-blog-api.vercel.app/uploads/${blog.image}` : null,
+    })
+  } catch (error) {
+    console.error("❌ Error in GET /blog/:id route:", error)
+    res.status(500).json({ error: "Failed to fetch blog", message: error.message })
+  }
+})
+
 // ✅ Add direct blog health route
 app.get("/blog/health", (req, res) => {
   try {
     res.json({
       status: "✅ Blog API Healthy",
       blogCount: sampleBlogs.length,
-      endpoints: ["/blog", "/blog/health", "/blog/:id"],
+      endpoints: ["/blog", "/blog/health", "/blog/:id", "/blog/upload"],
       timestamp: new Date().toISOString(),
+      cors: "Enabled for ALL origins",
     })
   } catch (error) {
     console.error("❌ Error in /blog/health route:", error)
@@ -586,6 +623,7 @@ app.get("/blog/health", (req, res) => {
 // ✅ Add direct auth login route (fallback)
 app.post("/api/auth/login", (req, res) => {
   try {
+    console.log("🔐 POST /api/auth/login endpoint called")
     const { username, password } = req.body
 
     if (!username || !password) {
@@ -671,7 +709,7 @@ app.post("/blog/upload", validateToken, upload.single("image"), (req, res) => {
   }
 })
 
-// ✅ API Routes (with error handling)
+// ✅ API Routes (with error handling) - Load AFTER direct routes
 try {
   app.use("/api/auth", authRoutes)
   console.log("✅ Auth routes loaded")
@@ -706,7 +744,15 @@ app.use("*", (req, res) => {
   res.status(404).json({
     error: "Route not found",
     message: `Cannot ${req.method} ${req.originalUrl}`,
-    availableRoutes: ["GET /", "GET /health", "GET /blog", "GET /blog/health", "POST /api/auth/login"],
+    availableRoutes: [
+      "GET /",
+      "GET /health",
+      "GET /blog",
+      "GET /blog/:id",
+      "GET /blog/health",
+      "POST /blog/upload",
+      "POST /api/auth/login",
+    ],
     timestamp: new Date().toISOString(),
   })
 })
