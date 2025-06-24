@@ -369,6 +369,7 @@ const cors = require("cors")
 const fs = require("fs")
 const path = require("path")
 const mongoose = require("mongoose")
+const multer = require("multer")
 
 const connectDB = require("./config/db")
 const authRoutes = require("./routes/authRoutes")
@@ -383,6 +384,20 @@ if (!fs.existsSync(uploadsDir)) {
   console.log("📁 Created uploads directory")
 }
 
+// ✅ Configure multer for file uploads (in-memory storage for Vercel)
+const storage = multer.memoryStorage()
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true)
+    } else {
+      cb(new Error("Only image files are allowed!"), false)
+    }
+  },
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+})
+
 // ✅ Enhanced CORS Configuration
 app.use(
   cors({
@@ -393,10 +408,14 @@ app.use(
       "https://your-frontend-domain.com", // Add your deployed frontend domain
     ],
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
+    optionsSuccessStatus: 200,
   }),
 )
+
+// Handle preflight requests explicitly
+app.options("*", cors())
 
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
@@ -447,6 +466,24 @@ const sampleBlogs = [
     updatedAt: new Date("2024-01-17").toISOString(),
   },
 ]
+
+// ✅ Simple token validation
+const validateToken = (req, res, next) => {
+  const authHeader = req.headers["authorization"]
+  const token = authHeader && authHeader.split(" ")[1]
+
+  if (!token) {
+    return res.status(401).json({ error: "Access token required" })
+  }
+
+  // Simple token validation (in real app, use JWT)
+  if (token === "sample-jwt-token-for-testing") {
+    req.user = { username: "getachew", role: "owner" }
+    next()
+  } else {
+    return res.status(403).json({ error: "Invalid or expired token" })
+  }
+}
 
 // Connect to database (with error handling)
 try {
@@ -588,6 +625,52 @@ app.post("/api/auth/login", (req, res) => {
   }
 })
 
+// ✅ Add direct blog upload route (for your PostForm)
+app.post("/blog/upload", validateToken, upload.single("image"), (req, res) => {
+  try {
+    console.log("📝 POST /blog/upload endpoint called")
+    console.log("Request body:", req.body)
+    console.log("File:", req.file ? "File uploaded" : "No file")
+
+    const { title, content, author, date, link } = req.body
+
+    if (!title || !content || !author) {
+      return res.status(400).json({
+        error: "Title, content, and author are required fields",
+      })
+    }
+
+    const newBlog = {
+      _id: new Date().getTime().toString(),
+      id: new Date().getTime().toString(),
+      title,
+      content,
+      author,
+      date: date ? new Date(date).toISOString() : new Date().toISOString(),
+      link: link || null,
+      image: req.file ? req.file.originalname : null,
+      imageUrl: req.file ? `https://getach-blog-api.vercel.app/uploads/${req.file.originalname}` : null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+
+    sampleBlogs.unshift(newBlog)
+
+    res.status(201).json({
+      success: true,
+      message: "Blog created successfully!",
+      blog: newBlog,
+      id: newBlog._id,
+    })
+  } catch (error) {
+    console.error("❌ Error in POST /blog/upload route:", error)
+    res.status(500).json({
+      error: "Failed to create blog",
+      message: error.message,
+    })
+  }
+})
+
 // ✅ API Routes (with error handling)
 try {
   app.use("/api/auth", authRoutes)
@@ -603,6 +686,19 @@ try {
 } catch (error) {
   console.error("❌ Error loading blog routes:", error.message)
 }
+
+// ✅ Multer error handling
+app.use((error, req, res, next) => {
+  if (error instanceof multer.MulterError) {
+    if (error.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ error: "File too large. Maximum size is 5MB." })
+    }
+  }
+  if (error.message === "Only image files are allowed!") {
+    return res.status(400).json({ error: "Only image files are allowed!" })
+  }
+  next(error)
+})
 
 // ✅ Enhanced 404 handler
 app.use("*", (req, res) => {
